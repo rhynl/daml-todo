@@ -1,0 +1,94 @@
+module Main where
+
+import Daml.Script
+
+type AuthorId = ContractId Author
+template Author
+  with
+    username: Party
+    displayName: Text
+    email: Text
+  where
+    signatory username
+    
+    key username : Party
+    maintainer key
+
+    nonconsuming choice CreateTodo: TodoId
+      with
+        id: Text
+        title: Text
+        -- updatedAt: Time
+      controller this.username
+      do
+        currentTime <- getTime
+        create Todo with author = this, isCompleted = False, createdAt = currentTime, updatedAt = currentTime, ..
+
+type TodoId = ContractId Todo
+type TodoUId = (Party, Text)
+template Todo
+  with
+    id: Text
+    author: Author
+    title: Text
+    isCompleted: Bool
+    createdAt: Time
+    updatedAt: Time
+  where
+    ensure title /= ""
+    signatory author.username
+
+    key (author.username, id): TodoUId
+    maintainer key._1
+
+    choice UpdateAuthor: TodoId
+      with
+        newAuthor: Author
+      controller author.username
+      do
+        assertMsg "Nothing to update here" (newAuthor /= author)
+        -- assertMsg "Cannot modify the author's username of an existing Todo" (newAuthor.username == author.username)
+        currentTime <- getTime
+        create this with author = newAuthor, updatedAt = currentTime
+
+    choice UpdateTodoTitle : TodoId
+      with
+        newTitle: Text
+      controller author.username
+      do
+        currentTime <- getTime
+        create this with title = newTitle, updatedAt = currentTime
+
+    choice CompleteTodo : TodoId
+      controller author.username
+      do
+        currentTime <- getTime
+        create this with isCompleted = True, updatedAt = currentTime
+todo_tests = do
+  currentTime <- getTime
+  -- Alice username
+  alice <- allocateParty "Alice"
+  -- Create Author Alice
+  aliceAuthorId <- submit alice do
+    createCmd Author with
+      username = alice
+      displayName = "Alice"
+      email = "alice@wonderland.com"
+  -- Alice creates a TODO
+  submit alice do
+    exerciseCmd aliceAuthorId CreateTodo with id = "1", title = "create a Daml app"
+  -- Alice creates an idential TODO with the same id, Expected failure due to unique key violation
+  submitMustFail alice do
+    exerciseCmd aliceAuthorId CreateTodo with id = "1", title = "This TODO should fail"
+  -- Alice creates a second TODO
+  submit alice do
+    exerciseCmd aliceAuthorId CreateTodo with id = "2", title = "Very important TODO"
+
+  Some (aliceFirstTodo, _) <- queryContractKey @Todo alice (alice, "1")
+
+  aliceFirstTodo <- submit alice do
+    exerciseCmd aliceFirstTodo UpdateTodoTitle with newTitle = "Create a TODO App using Daml"
+
+  submit alice do
+    exerciseCmd aliceFirstTodo CompleteTodo
+
