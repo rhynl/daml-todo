@@ -10,7 +10,7 @@ template Author
     email: Text
   where
     signatory username
-    
+
     key username : Party
     maintainer key
 
@@ -18,7 +18,6 @@ template Author
       with
         id: Text
         title: Text
-        -- updatedAt: Time
       controller this.username
       do
         currentTime <- getTime
@@ -41,15 +40,16 @@ template Todo
     key (author.username, id): TodoUId
     maintainer key._1
 
-    choice UpdateAuthor: TodoId
+    choice UpdateAuthor: TransferAuthorshipProposalId
       with
         newAuthor: Author
       controller author.username
       do
-        assertMsg "Nothing to update here" (newAuthor /= author)
-        -- assertMsg "Cannot modify the author's username of an existing Todo" (newAuthor.username == author.username)
         currentTime <- getTime
-        create this with author = newAuthor, updatedAt = currentTime
+        create TransferAuthorshipProposal
+          with
+            todo = this
+            newAuthor
 
     choice UpdateTodoTitle : TodoId
       with
@@ -64,7 +64,26 @@ template Todo
       do
         currentTime <- getTime
         create this with isCompleted = True, updatedAt = currentTime
-todo_tests = do
+
+type TransferAuthorshipProposalId = ContractId TransferAuthorshipProposal
+template TransferAuthorshipProposal
+  with
+    todo: Todo
+    newAuthor: Author
+  where
+    signatory todo.author.username
+    observer newAuthor.username
+
+    choice AcceptAuthorship: TodoId
+      controller newAuthor.username
+      do
+        create todo with author = newAuthor
+
+    choice RejectAuthorship: TodoId
+      controller todo.author.username
+      do create todo
+
+todo_script = script do
   currentTime <- getTime
   -- Alice username
   alice <- allocateParty "Alice"
@@ -92,3 +111,26 @@ todo_tests = do
   submit alice do
     exerciseCmd aliceFirstTodo CompleteTodo
 
+  -- Bob username
+  bob <- allocateParty "Bob"
+  -- Create Author Alice
+  bobAuthorId <- submit bob do
+    createCmd Author with
+      username = bob
+      displayName = "Bob"
+      email = "bob@squarepants.com"
+
+  Some bobAuthor <- queryContractId @Author bob (bobAuthorId)
+  Some (secondTodo, _) <- queryContractKey @Todo alice (alice, "2")
+
+  Some aliceAuthor <- queryContractId @Author alice (aliceAuthorId)
+
+  proposal <- submit alice do
+    exerciseCmd secondTodo UpdateAuthor
+      with newAuthor = bobAuthor
+
+  secondTodo <- submit bob do
+    exerciseCmd proposal AcceptAuthorship
+
+  submit bob do
+    exerciseCmd secondTodo CompleteTodo
